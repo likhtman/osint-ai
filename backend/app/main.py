@@ -1,8 +1,19 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import router
+from app.core.db import engine, Base
+import asyncio
+
+async def init_db():
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
 
 app = FastAPI(title="OSINT AI Agent")
+
+@app.on_event("startup")
+async def startup_event():
+    await init_db()
+
 
 app.add_middleware(
     CORSMiddleware,
