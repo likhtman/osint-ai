@@ -1,14 +1,15 @@
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, JSON
 from sqlalchemy.orm import relationship
-from datetime import datetime
+from datetime import datetime, timezone
 from app.core.db import Base
+
 
 class ScanTask(Base):
     __tablename__ = "scan_tasks"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     query_text = Column(Text, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     
     entities = relationship("ScanEntity", back_populates="task", cascade="all, delete-orphan")
 

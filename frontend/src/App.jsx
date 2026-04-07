@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Search, FileText, User, MapPin, Bell, Download, ChevronDown, ChevronRight, Bot, AlertTriangle, Fingerprint, History, Clock } from 'lucide-react';
+import { Search, User, Bell, ChevronRight, Bot, Fingerprint, History, Clock, Globe } from 'lucide-react';
 import './index.css';
+
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 function App() {
   const [queryText, setQueryText] = useState('');
@@ -18,7 +20,7 @@ function App() {
 
   const fetchHistory = async () => {
     try {
-      const response = await fetch('http://localhost:8000/api/v1/history');
+      const response = await fetch(`${API_BASE}/api/v1/history`);
       const data = await response.json();
       setHistory(data);
     } catch (err) {
@@ -32,21 +34,21 @@ function App() {
     setEntities({});
     setExpanded({});
     try {
-      const response = await fetch(`http://localhost:8000/api/v1/scan/${taskId}`);
+      const response = await fetch(`${API_BASE}/api/v1/scan/${taskId}`);
       const task = await response.json();
-      
+
       const entitiesData = {};
       task.entities.forEach(entity => {
         const platforms = {};
         entity.responses.forEach(resp => {
            platforms[resp.platform] = { status: 'complete', text: resp.content };
         });
-        
+
         entitiesData[entity.name] = {
           name: entity.name,
           hypotheses: entity.hypotheses || [],
-          platforms: platforms,
-          insight: 'Архивные данные',
+          platforms,
+          insight: 'Archived',
           threatLevel: 'Moderate'
         };
       });
@@ -66,41 +68,40 @@ function App() {
     setEntities({});
     setExpanded({});
     setCurrentTaskId(null);
-    
+
     try {
-      const response = await fetch('http://localhost:8000/api/v1/analyze', {
+      const response = await fetch(`${API_BASE}/api/v1/analyze`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ queryText })
       });
-      
+
       const reader = response.body?.getReader();
       const decoder = new TextDecoder();
-      
+
       if (!reader) throw new Error('No reader available');
-      
+
+      let buffer = '';
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
-        
-        const chunk = decoder.decode(value, { stream: true });
-        const events = chunk.split('\n\n');
-        
-        for (const event of events) {
+
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split('\n\n');
+        // Keep the last incomplete chunk in the buffer
+        buffer = parts.pop() || '';
+
+        for (const event of parts) {
           if (!event.startsWith('data: ')) continue;
-          
           try {
-            const dataStr = event.replace('data: ', '');
-            if (!dataStr.trim()) continue;
-            
-            const data = JSON.parse(dataStr);
+            const data = JSON.parse(event.slice(6));
             handleServerEvent(data);
           } catch (e) {
-            console.error('Error parsing JSON event:', e);
+            console.error('Error parsing SSE event:', e);
           }
         }
       }
-      fetchHistory(); // Обновляем историю после завершения
+      fetchHistory();
     } catch (err) {
       console.error(err);
     } finally {
@@ -112,11 +113,11 @@ function App() {
     if (data.type === 'entity_start') {
       setEntities(prev => ({
         ...prev,
-        [data.entity]: { 
-          name: data.entity, 
-          hypotheses: [], 
+        [data.entity]: {
+          name: data.entity,
+          hypotheses: [],
           platforms: {},
-          insight: 'Сканирование...',
+          insight: 'Scanning...',
           threatLevel: 'loading'
         }
       }));
@@ -143,7 +144,8 @@ function App() {
       setEntities(prev => {
         const currentEntity = prev[data.entity];
         if (!currentEntity) return prev;
-        const pdData = Object.keys(currentEntity.platforms || {}).length;
+        const completedCount = Object.values(currentEntity.platforms || {}).filter(p => p.status === 'complete').length + 1;
+        const totalPlatforms = Object.keys(currentEntity.platforms || {}).length;
         return {
           ...prev,
           [data.entity]: {
@@ -152,10 +154,10 @@ function App() {
                ...currentEntity.platforms,
                [data.platform]: { status: 'complete', text: data.result }
             },
-            insight: pdData > 1 ? 'Data Aggregated' : 'Collecting...',
-            threatLevel: pdData > 3 ? 'Moderate' : 'Low'
+            insight: completedCount >= totalPlatforms ? 'Data Aggregated' : `${completedCount}/${totalPlatforms} collected`,
+            threatLevel: completedCount >= totalPlatforms ? 'Moderate' : 'Low'
           }
-        }
+        };
       });
     }
   };
@@ -168,7 +170,7 @@ function App() {
       <div className="app-container">
         <nav className="navbar">
           <div className="nav-brand">
-            <Fingerprint className="text-accent-blue" size={24} color="#3b82f6" />
+            <Fingerprint size={24} color="#3b82f6" />
             OSINT INTELLIGENCE <span>| AXON AI</span>
           </div>
           <div className="nav-links">
@@ -183,21 +185,20 @@ function App() {
         </nav>
 
         <div className="main-layout">
-          {/* SIDEBAR */}
           <aside className="sidebar">
             <div className="sidebar-title">
               <History size={16} /> Recent Scans
             </div>
             <div className="history-list">
               {history.map(item => (
-                <div 
-                  key={item.id} 
+                <div
+                  key={item.id}
                   className={`history-item ${currentTaskId === item.id ? 'active' : ''}`}
                   onClick={() => loadScan(item.id)}
                 >
                   <div className="history-query">{item.query_text}</div>
                   <div className="history-date">
-                    <Clock size={12} inline /> {new Date(item.created_at).toLocaleString()}
+                    <Clock size={12} /> {new Date(item.created_at).toLocaleString()}
                   </div>
                 </div>
               ))}
@@ -205,21 +206,20 @@ function App() {
             </div>
           </aside>
 
-          {/* CONTENT AREA */}
           <main className="content-area">
             <div className="search-section">
-              <h1 className="search-title">Search Queries & Intelligence Targets...</h1>
-              
+              <h1 className="search-title">Search Queries & Intelligence Targets</h1>
+
               <div className="search-widget">
                 <div className="search-tabs">
                   <button className={`search-tab ${activeTab === 'search' ? 'active' : ''}`} onClick={() => setActiveTab('search')}><Search size={20} /></button>
                   <button className={`search-tab ${activeTab === 'user' ? 'active' : ''}`} onClick={() => setActiveTab('user')}><User size={20} /></button>
                 </div>
-                
+
                 <div className="search-input-group">
-                  <input 
-                    type="text" 
-                    className="search-input" 
+                  <input
+                    type="text"
+                    className="search-input"
                     placeholder="Enter Entity, Keyword, URL..."
                     value={queryText}
                     onChange={(e) => setQueryText(e.target.value)}
@@ -246,7 +246,7 @@ function App() {
                 <AnimatePresence>
                   {Object.values(entities).map((entityData, i) => (
                     <div key={entityData.name} className="table-row-group">
-                      <motion.div 
+                      <motion.div
                         className="table-row"
                         onClick={() => toggleRow(entityData.name)}
                         style={{ cursor: 'pointer' }}
@@ -254,23 +254,20 @@ function App() {
                         animate={{ opacity: 1, y: 0 }}
                       >
                         <div className="row-accent" style={{ background: i % 2 === 0 ? 'var(--accent-cyan)' : 'var(--accent-purple)' }}></div>
-                        
+
                         <div className="cell-entity">
                           <motion.div animate={{ rotate: expanded[entityData.name] ? 90 : 0 }}>
                             <ChevronRight size={18} color="#8b949e" />
                           </motion.div>
                           <div className="entity-icon"><User size={20} /></div>
-                          <div>
-                            {entityData.name}
-                            {entityData.name !== queryText.trim() && <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>(Variant)</div>}
-                          </div>
+                          <div>{entityData.name}</div>
                         </div>
 
                         <div className="cell-question">
                           {entityData.hypotheses.length > 0 ? (
                             <div style={{ fontSize: '0.85rem' }}>
                               {entityData.hypotheses.map((h, idx) => (
-                                <div key={idx} style={{ marginBottom: "2px" }}>• {h}</div>
+                                <div key={idx} style={{ marginBottom: '2px' }}>&#8226; {h}</div>
                               ))}
                             </div>
                           ) : (
@@ -281,8 +278,8 @@ function App() {
                         <div className="cell-sources">
                           {Object.keys(entityData.platforms || {}).length > 0 ? (
                             <>
-                              <div className="source-count">{Object.keys(entityData.platforms).length}</div>
-                              {Object.keys(entityData.platforms).slice(0,3).map(p => (
+                              <div className="source-count">{Object.values(entityData.platforms).filter(p => p.status === 'complete').length}</div>
+                              {Object.keys(entityData.platforms).slice(0, 3).map(p => (
                                 <div key={p} className="source-icon" title={p}><Bot size={16} /></div>
                               ))}
                             </>
@@ -302,27 +299,29 @@ function App() {
                         <div className="cell-status">
                            <span className="status-label">Risk:</span>
                            <span className={`status-value ${entityData.threatLevel?.toLowerCase()}`}>
-                             {isAnalysing ? 'Loading...' : entityData.threatLevel || 'Scanning'}
+                             {entityData.threatLevel === 'loading' ? 'Scanning...' : entityData.threatLevel || 'N/A'}
                            </span>
                         </div>
                       </motion.div>
 
                       <AnimatePresence>
                         {expanded[entityData.name] && (
-                          <motion.div 
+                          <motion.div
                             className="expanded-details"
                             initial={{ height: 0, opacity: 0 }}
                             animate={{ height: 'auto', opacity: 1 }}
                             exit={{ height: 0, opacity: 0 }}
                           >
                             <div className="details-content">
-                              <h4 style={{marginTop: 0, color: 'var(--text-secondary)'}}>Собранное досье</h4>
                               <div className="details-grid">
-                                {Object.entries(entityData.platforms || {}).map(([platform, data]) => (
+                                {Object.entries(entityData.platforms || {}).map(([platform, pdata]) => (
                                    <div key={platform} className="platform-detail-card">
-                                      <div className="platform-head"><Bot size={16}/> {platform}</div>
+                                      <div className="platform-head">
+                                        {platform.includes('Search') || platform === 'Perplexity' ? <Globe size={16}/> : <Bot size={16}/>}
+                                        {platform}
+                                      </div>
                                       <div className="platform-body">
-                                        {data.status === 'loading' ? '⏳ Поиск...' : data.text}
+                                        {pdata.status === 'loading' ? 'Searching...' : pdata.text}
                                       </div>
                                    </div>
                                 ))}
